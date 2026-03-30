@@ -1,0 +1,26 @@
+{
+  "name": "memory-mcp-server",
+  "version": "1.0.0",
+  "description": "Persistent memory MCP server for LLMs — save, recall, and manage memories across sessions",
+  "main": "dist/index.js",
+  "bin": {
+    "memory-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@types/express": "^5.0.6",
+    "express": "^5.2.1",
+    "uuid": "^10.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.0.0"
+  }
+}
