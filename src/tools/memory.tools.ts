@@ -9,10 +9,10 @@ const SortBySchema = z.enum(["created_at", "updated_at", "importance", "access_c
 
 export function registerTools(server: McpServer, memory: MemoryService): void {
 
-  // ── memory_session_start ────────────────────────────────────────────────────
+  // ── memory_memory_brief ────────────────────────────────────────────────────
 
   server.registerTool(
-    "memory_session_start",
+    "memory_memory_brief",
     {
       title: "Session Start — Memory Brief",
       description: `⚡ CALL THIS TOOL ONCE AT THE START OF EVERY NEW CONVERSATION.
@@ -32,7 +32,7 @@ Returns: A formatted memory brief ready for you to internalize before responding
 
 Usage pattern:
   1. User opens a new conversation
-  2. You call memory_session_start immediately
+  2. You call memory_memory_brief immediately
   3. You read the brief and silently apply all instructions and context
   4. You greet the user`,
       inputSchema: z.object({}),
