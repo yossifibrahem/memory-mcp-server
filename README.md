@@ -61,7 +61,7 @@ Default store path: `~/.memory-mcp/memories.json`
 
 ## Integration
 
-### Cursor / Claude Desktop (`~/.cursor/mcp.json` or `claude_desktop_config.json`)
+### Cursor / Claude Desktop/ LM Studio (`~/.cursor/mcp.json` or `claude_desktop_config.json`)
 
 ```json
 {
@@ -71,17 +71,6 @@ Default store path: `~/.memory-mcp/memories.json`
       "args": ["/absolute/path/to/memory-mcp-server/dist/index.js"]
     }
   }
-}
-```
-
-### LM Studio (MCP config)
-
-```json
-{
-  "name": "memory",
-  "transport": "stdio",
-  "command": "node",
-  "args": ["/absolute/path/to/memory-mcp-server/dist/index.js"]
 }
 ```
 
