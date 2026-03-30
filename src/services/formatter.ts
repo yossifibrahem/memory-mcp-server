@@ -1,4 +1,4 @@
-import { Memory, SearchResult } from "../types.js";
+import { Memory, SearchResult, SessionSummary } from "../types.js";
 
 export function formatMemory(m: Memory): string {
   return [
@@ -28,4 +28,71 @@ export function formatMemoryList(memories: Memory[], total: number, offset: numb
   const lines = memories.map((m, i) => `${offset + i + 1}. [${m.importance}] ${m.key} (${m.category}): ${m.content.slice(0, 120)}${m.content.length > 120 ? "…" : ""}`);
   const header = `Found ${total} memor${total === 1 ? "y" : "ies"} (showing ${offset + 1}–${offset + memories.length}):`;
   return [header, ...lines].join("\n");
+}
+
+function memoryLine(m: Memory): string {
+  return `  • [${m.key}] ${m.content.slice(0, 100)}${m.content.length > 100 ? "…" : ""}`;
+}
+
+export function formatSessionSummary(s: SessionSummary): string {
+  const lines: string[] = [];
+
+  if (s.total_memories === 0) {
+    lines.push("📭 Memory store is empty. Nothing to recall yet.");
+    return lines.join("\n");
+  }
+
+  // ── Pinned instructions ────────────────────────────────────────────────────
+  if (s.pinned_instructions.length > 0) {
+    lines.push("📌 INSTRUCTIONS (always apply these):");
+    s.pinned_instructions.forEach(m => lines.push(memoryLine(m)));
+    lines.push("");
+  }
+
+  // ── Critical memories ──────────────────────────────────────────────────────
+  if (s.critical_memories.length > 0) {
+    lines.push("🔴 CRITICAL:");
+    s.critical_memories.forEach(m => lines.push(memoryLine(m)));
+    lines.push("");
+  }
+
+  // ── High importance ────────────────────────────────────────────────────────
+  if (s.high_memories.length > 0) {
+    lines.push("🟠 HIGH IMPORTANCE:");
+    s.high_memories.forEach(m => lines.push(memoryLine(m)));
+    lines.push("");
+  }
+
+  // ── Category breakdown ─────────────────────────────────────────────────────
+  const skipCategories = new Set(["instruction"]);
+  const categories = Object.entries(s.by_category)
+    .filter(([cat]) => !skipCategories.has(cat))
+    .sort((a, b) => b[1].length - a[1].length);
+
+  if (categories.length > 0) {
+    lines.push("📂 ALL MEMORIES BY CATEGORY:");
+    for (const [cat, memories] of categories) {
+      lines.push(`  ▸ ${cat} (${memories.length}):`);
+      memories.forEach(m => lines.push(`  ${memoryLine(m)}`));
+    }
+    lines.push("");
+  }
+
+  // ── Recently updated ──────────────────────────────────────────────────────
+  const recentKeys = new Set([
+    ...s.critical_memories.map(m => m.key),
+    ...s.high_memories.map(m => m.key),
+    ...s.pinned_instructions.map(m => m.key),
+  ]);
+  const newRecent = s.recent_memories.filter(m => !recentKeys.has(m.key));
+  if (newRecent.length > 0) {
+    lines.push(`🕐 RECENTLY UPDATED (last 7 days, ${newRecent.length} item${newRecent.length === 1 ? "" : "s"}):`);
+    newRecent.forEach(m => lines.push(memoryLine(m)));
+    lines.push("");
+  }
+
+  lines.push("──────────────────────────────────────────────────");
+  lines.push("Use memory_search or memory_recall for full details.");
+
+  return lines.join("\n");
 }

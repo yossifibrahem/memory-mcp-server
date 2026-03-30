@@ -1,13 +1,57 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MemoryService } from "../services/memory.service.js";
-import { formatMemory, formatSearchResult, formatMemoryList } from "../services/formatter.js";
+import { formatMemory, formatSearchResult, formatMemoryList, formatSessionSummary } from "../services/formatter.js";
 import { ImportanceLevel } from "../types.js";
 
 const ImportanceSchema = z.enum(["low", "medium", "high", "critical"]);
 const SortBySchema = z.enum(["created_at", "updated_at", "importance", "access_count"]);
 
 export function registerTools(server: McpServer, memory: MemoryService): void {
+
+  // ── memory_session_start ────────────────────────────────────────────────────
+
+  server.registerTool(
+    "memory_session_start",
+    {
+      title: "Session Start — Memory Brief",
+      description: `⚡ CALL THIS TOOL ONCE AT THE START OF EVERY NEW CONVERSATION.
+
+Loads a structured memory brief so you begin each session with full context about the user. Returns:
+  - Pinned instructions (category="instruction") — rules you must always follow
+  - Critical & high-importance memories — the most essential facts
+  - All memories grouped by category — complete picture
+  - Recently updated memories (last 7 days) — what changed since last session
+  - Session metadata — session ID, when the previous session was, total memory count
+
+This tool records the session start in the session log (used for history and diagnostics).
+
+Args: (none)
+
+Returns: A formatted memory brief ready for you to internalize before responding to the user.
+
+Usage pattern:
+  1. User opens a new conversation
+  2. You call memory_session_start immediately
+  3. You read the brief and silently apply all instructions and context
+  4. You greet the user`,
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,  // false because it writes a session log entry
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      const summary = memory.startSession();
+      const text = formatSessionSummary(summary);
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: summary as unknown as Record<string, unknown>,
+      };
+    }
+  );
 
   // ── memory_save ─────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { Memory, MemoryStore, SearchResult, ImportanceLevel } from "../types.js";
+import { Memory, MemoryStore, SearchResult, ImportanceLevel, SessionLog, SessionSummary } from "../types.js";
 
 const STORE_VERSION = "1.0.0";
 const DEFAULT_STORE_PATH = path.join(
@@ -14,12 +14,18 @@ function loadStore(storePath: string): MemoryStore {
   try {
     if (fs.existsSync(storePath)) {
       const raw = fs.readFileSync(storePath, "utf-8");
-      return JSON.parse(raw) as MemoryStore;
+      const parsed = JSON.parse(raw) as Partial<MemoryStore>;
+      return {
+        version: parsed.version ?? STORE_VERSION,
+        memories: parsed.memories ?? {},
+        sessions: parsed.sessions ?? [],   // back-compat with old stores
+        last_saved: parsed.last_saved ?? new Date().toISOString(),
+      };
     }
   } catch {
     // Corrupted store → start fresh
   }
-  return { version: STORE_VERSION, memories: {}, last_saved: new Date().toISOString() };
+  return { version: STORE_VERSION, memories: {}, sessions: [], last_saved: new Date().toISOString() };
 }
 
 function saveStore(store: MemoryStore, storePath: string): void {
@@ -265,5 +271,63 @@ export class MemoryService {
     }
     saveStore(this.store, this.storePath);
     return before - Object.keys(this.store.memories).length;
+  }
+
+  // ── Session start ─────────────────────────────────────────────────────────────
+
+  startSession(): SessionSummary {
+    const now = new Date().toISOString();
+    const sessionId = crypto.randomUUID();
+    const allMemories = Object.values(this.store.memories);
+
+    // Record this session
+    const log: SessionLog = {
+      session_id: sessionId,
+      started_at: now,
+      memory_count: allMemories.length,
+    };
+    this.store.sessions.push(log);
+    // Keep only the last 100 session logs
+    if (this.store.sessions.length > 100) {
+      this.store.sessions = this.store.sessions.slice(-100);
+    }
+    saveStore(this.store, this.storePath);
+
+    // Previous session (second-to-last after we just pushed)
+    const prevSession = this.store.sessions.length >= 2
+      ? this.store.sessions[this.store.sessions.length - 2]
+      : null;
+
+    // 7-day recency window
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Group by category
+    const by_category: Record<string, Memory[]> = {};
+    for (const m of allMemories) {
+      (by_category[m.category] ??= []).push(m);
+    }
+    // Sort each group: critical first, then by updated_at desc
+    const importanceRank: Record<ImportanceLevel, number> = {
+      low: 1, medium: 2, high: 3, critical: 4,
+    };
+    for (const group of Object.values(by_category)) {
+      group.sort((a, b) =>
+        importanceRank[b.importance] - importanceRank[a.importance] ||
+        b.updated_at.localeCompare(a.updated_at)
+      );
+    }
+
+    return {
+      session_id: sessionId,
+      started_at: now,
+      total_memories: allMemories.length,
+      sessions_count: this.store.sessions.length,
+      last_session_at: prevSession?.started_at ?? null,
+      critical_memories: allMemories.filter(m => m.importance === "critical"),
+      high_memories: allMemories.filter(m => m.importance === "high"),
+      recent_memories: allMemories.filter(m => m.updated_at >= sevenDaysAgo),
+      by_category,
+      pinned_instructions: allMemories.filter(m => m.category === "instruction"),
+    };
   }
 }
