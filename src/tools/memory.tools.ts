@@ -29,7 +29,10 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
         "⚡ CALL THIS ONCE AT THE START OF EVERY NEW CONVERSATION.\n\n" +
         "Returns a full memory brief: pinned instructions, critical/high memories, all memories by category, " +
         "and recently updated entries. Logs the session start.\n\n" +
-        "Pattern: call → read brief silently → greet the user.",
+        "Pattern: call → read brief silently → greet the user.\n\n" +
+        "Examples:\n" +
+        "  memory_brief({})   // called automatically at the top of every conversation\n" +
+        "  // → returns pinned instructions, critical/high memories, and a per-category index",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -53,7 +56,11 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
         "  category   — namespace (e.g. user, project, instruction). Default: general\n" +
         "  tags       — searchable labels\n" +
         "  importance — low | medium | high | critical. Default: medium\n" +
-        "  metadata   — extra string key-value pairs",
+        "  metadata   — extra string key-value pairs\n\n" +
+        "Examples:\n" +
+        "  memory_save({key: \"user_name\", content: \"Alice\", category: \"user\", importance: \"high\"})\n" +
+        "  memory_save({key: \"project_deadline\", content: \"MVP due 2026-06-01\", category: \"project\", tags: [\"deadline\", \"mvp\"], importance: \"critical\"})\n" +
+        "  memory_save({key: \"user_name\", importance: \"critical\"})  // update only importance; content preserved",
       inputSchema: z.object({
         key:        keySchema.describe("Unique memory key (auto-normalized to snake_case)"),
         content:    z.string().min(1).max(10_000).optional().describe("Memory content"),
@@ -82,7 +89,10 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
       description:
         "Retrieve a memory by its exact key. Use memory_search for fuzzy/keyword lookup.\n\n" +
         "Args:\n" +
-        "  key — exact memory key",
+        "  key — exact memory key\n\n" +
+        "Examples:\n" +
+        "  memory_recall({key: \"user_name\"})         // fetch a known key directly\n" +
+        "  memory_recall({key: \"project_deadline\"})  // keys are snake_case-normalized on save",
       inputSchema: z.object({
         key: z.string().min(1).describe("Exact memory key"),
       }),
@@ -111,7 +121,10 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
         "  query    — keywords or phrase\n" +
         "  category — restrict to a category (optional)\n" +
         "  tags     — restrict to memories with any of these tags (optional)\n" +
-        "  limit    — max results (default 10, max 50)",
+        "  limit    — max results (default 10, max 50)\n\n" +
+        "Examples:\n" +
+        "  memory_search({query: \"project deadline\"})                              // broad keyword search\n" +
+        "  memory_search({query: \"API auth\", category: \"project\", limit: 5})  // scoped + limited results",
       inputSchema: z.object({
         query:    z.string().min(1).max(500).describe("Search query"),
         category: z.string().optional().describe("Filter by category"),
@@ -157,7 +170,10 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
         "  sort_by    — created_at | updated_at | importance | access_count (default: updated_at)\n" +
         "  sort_order — asc | desc (default: desc)\n" +
         "  limit      — page size (default 50, max 200)\n" +
-        "  offset     — pagination offset (default 0)",
+        "  offset     — pagination offset (default 0)\n\n" +
+        "Examples:\n" +
+        "  memory_list({category: \"user\", sort_by: \"importance\", sort_order: \"desc\"})  // all user memories, most important first\n" +
+        "  memory_list({importance: \"critical\", limit: 10})                               // quick scan of critical entries",
       inputSchema: z.object({
         category:   z.string().optional(),
         tags:       z.array(z.string()).optional(),
@@ -192,7 +208,10 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
     "memory_delete",
     {
       title: "Delete Memory",
-      description: "Permanently delete a memory by key. Irreversible.\n\nArgs:\n  key — exact key to delete",
+      description: "Permanently delete a memory by key. Irreversible.\n\nArgs:\n  key — exact key to delete\n\n" +
+        "Examples:\n" +
+        "  memory_delete({key: \"old_api_key\"})       // remove a stale secret\n" +
+        "  memory_delete({key: \"temp_draft_notes\"})  // clean up ephemeral entries",
       inputSchema: z.object({
         key: z.string().min(1).describe("Exact memory key to delete"),
       }),
