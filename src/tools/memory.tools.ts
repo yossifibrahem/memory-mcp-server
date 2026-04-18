@@ -279,7 +279,7 @@ Returns: Paginated list of memories with total count.`,
       title: "Delete Memory",
       description: `Permanently delete a memory by its key.
 
-This action is irreversible. Use with care. To delete multiple memories or a whole category, use memory_clear.
+This action is irreversible. Use with care.
 
 Args:
   - key (string): Exact key of the memory to delete.
@@ -310,92 +310,4 @@ Returns: Confirmation if deleted, or error if key not found.`,
     }
   );
 
-  // ── memory_stats ────────────────────────────────────────────────────────────
-
-  server.registerTool(
-    "memory_stats",
-    {
-      title: "Memory Statistics",
-      description: `Get an overview of the memory store: total count, breakdown by category and importance, storage path, and last save time.
-
-Use this to audit what's stored, check storage health, or get a quick summary before deciding what to save or clean up.
-
-Args: (none)
-
-Returns: Stats object with totals, breakdowns, and store path.`,
-      inputSchema: z.object({}),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async () => {
-      const stats = memory.stats();
-      const categoryLines = Object.entries(stats.by_category)
-        .sort((a, b) => b[1] - a[1])
-        .map(([cat, count]) => `  ${cat}: ${count}`).join("\n");
-
-      const text = [
-        `📊 Memory Store Statistics`,
-        `─────────────────────────`,
-        `Total memories: ${stats.total}`,
-        ``,
-        `By importance:`,
-        `  🔴 critical: ${stats.by_importance.critical}`,
-        `  🟠 high:     ${stats.by_importance.high}`,
-        `  🟡 medium:   ${stats.by_importance.medium}`,
-        `  🟢 low:      ${stats.by_importance.low}`,
-        ``,
-        `By category:`,
-        categoryLines || "  (none)",
-        ``,
-        `Store path:  ${stats.store_path}`,
-        `Last saved:  ${stats.last_saved}`,
-      ].join("\n");
-
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: stats,
-      };
-    }
-  );
-
-  // ── memory_clear ────────────────────────────────────────────────────────────
-
-  server.registerTool(
-    "memory_clear",
-    {
-      title: "Clear Memories",
-      description: `Delete multiple memories at once — either all memories in a specific category, or the entire memory store.
-
-⚠️ This is a destructive, irreversible operation. Double-check before using.
-
-Args:
-  - category (string, optional): If provided, only memories in this category are deleted. If omitted, ALL memories are cleared.
-  - confirm (boolean): Must be set to true to proceed. Acts as a safety guard.
-
-Returns: Count of deleted memories.`,
-      inputSchema: z.object({
-        category: z.string().optional().describe("Category to clear. Omit to clear ALL memories."),
-        confirm: z.literal(true).describe("Must be true to confirm the destructive operation"),
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async (params) => {
-      const deleted = memory.clear(params.category);
-      const scope = params.category ? `category "${params.category}"` : "entire memory store";
-      const text = `🗑️ Cleared ${deleted} memor${deleted === 1 ? "y" : "ies"} from ${scope}.`;
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: { deleted_count: deleted, scope: params.category ?? "all" },
-      };
-    }
-  );
 }
