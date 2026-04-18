@@ -34,8 +34,16 @@ function memoryLine(m: Memory): string {
   return `  • [${m.key}] ${m.content.slice(0, 100)}${m.content.length > 100 ? "…" : ""}`;
 }
 
+const BRIEF_MAX_PER_CATEGORY = 20;
+const BRIEF_MAX_CHARS = 10_000;
+
 export function formatSessionSummary(s: SessionSummary): string {
   const lines: string[] = [];
+
+  // ── Session header ─────────────────────────────────────────────────────────
+  lines.push(`🧠 Memory Brief — Session #${s.sessions_count} (${s.session_id.slice(0, 8)})`);
+  lines.push(`📊 ${s.total_memories} memor${s.total_memories === 1 ? "y" : "ies"} stored${s.last_session_at ? ` | Last session: ${s.last_session_at}` : " | First session"}`);
+  lines.push("");
 
   if (s.total_memories === 0) {
     lines.push("📭 Memory store is empty. Nothing to recall yet.");
@@ -72,8 +80,13 @@ export function formatSessionSummary(s: SessionSummary): string {
   if (categories.length > 0) {
     lines.push("📂 ALL MEMORIES BY CATEGORY:");
     for (const [cat, memories] of categories) {
+      const shown = memories.slice(0, BRIEF_MAX_PER_CATEGORY);
+      const overflow = memories.length - shown.length;
       lines.push(`  ▸ ${cat} (${memories.length}):`);
-      memories.forEach(m => lines.push(`  ${memoryLine(m)}`));
+      shown.forEach(m => lines.push(`  ${memoryLine(m)}`));
+      if (overflow > 0) {
+        lines.push(`    … and ${overflow} more — use memory_list category="${cat}" to see all`);
+      }
     }
     lines.push("");
   }
@@ -94,5 +107,13 @@ export function formatSessionSummary(s: SessionSummary): string {
   lines.push("──────────────────────────────────────────────────");
   lines.push("Use memory_search or memory_recall for full details.");
 
-  return lines.join("\n");
+  const output = lines.join("\n");
+  if (output.length > BRIEF_MAX_CHARS) {
+    const truncated = output.slice(0, BRIEF_MAX_CHARS);
+    // Cut at a clean line boundary
+    const lastNewline = truncated.lastIndexOf("\n");
+    return truncated.slice(0, lastNewline) +
+      "\n\n… [brief truncated — store is large; use memory_list or memory_search for remaining memories]";
+  }
+  return output;
 }

@@ -32,7 +32,11 @@ function saveStore(store: MemoryStore, storePath: string): void {
   const dir = path.dirname(storePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   store.last_saved = new Date().toISOString();
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+  // Write atomically: write to a temp file then rename so a mid-write crash
+  // can never leave a partial/corrupted store file.
+  const tmp = storePath + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+  fs.renameSync(tmp, storePath);
 }
 
 // ─── MemoryService ─────────────────────────────────────────────────────────────
@@ -50,7 +54,7 @@ export class MemoryService {
 
   save(params: {
     key: string;
-    content: string;
+    content?: string;          // optional for updates — omit to keep existing content
     category?: string;
     tags?: string[];
     importance?: ImportanceLevel;
@@ -59,10 +63,14 @@ export class MemoryService {
     const now = new Date().toISOString();
     const existing = this.store.memories[params.key];
 
+    if (!existing && !params.content) {
+      throw new Error(`content is required when creating a new memory (key "${params.key}" does not exist yet)`);
+    }
+
     const memory: Memory = {
       id: existing?.id ?? crypto.randomUUID(),
       key: params.key,
-      content: params.content,
+      content: params.content ?? existing!.content,
       category: params.category ?? existing?.category ?? "general",
       tags: params.tags ?? existing?.tags ?? [],
       importance: params.importance ?? existing?.importance ?? "medium",
@@ -159,8 +167,19 @@ export class MemoryService {
     tags?: string[];
     limit?: number;
   }): SearchResult[] {
-    const query = params.query.toLowerCase();
-    const queryWords = query.split(/\s+/).filter(Boolean);
+    const STOP_WORDS = new Set([
+      "a","an","the","is","are","was","were","be","been","being",
+      "have","has","had","do","does","did","will","would","could","should",
+      "may","might","what","where","when","who","how","in","on","at","to",
+      "for","of","with","by","from","and","or","but","not","my","your",
+      "their","its","this","that","these","those","i","you","he","she","we","they",
+    ]);
+
+    const query = params.query.toLowerCase().trim();
+    // Filter stop words and single-char tokens so they don't dilute word coverage
+    const queryWords = query
+      .split(/\s+/)
+      .filter(w => w.length > 1 && !STOP_WORDS.has(w));
     const limit = params.limit ?? 10;
 
     let candidates = Object.values(this.store.memories);
@@ -191,12 +210,20 @@ export class MemoryService {
           reasons.push("key contains query");
         }
 
-        // Word coverage in content
-        const matchedWords = queryWords.filter(w => searchText.includes(w));
-        const wordScore = matchedWords.length / queryWords.length;
-        if (wordScore > 0) {
-          score += wordScore * 0.6;
-          reasons.push(`${matchedWords.length}/${queryWords.length} words matched`);
+        // Exact phrase match in content (bonus over individual word hits)
+        if (queryWords.length > 1 && memory.content.toLowerCase().includes(query)) {
+          score += 0.5;
+          reasons.push("exact phrase in content");
+        }
+
+        // Word coverage — only meaningful (non-stop) words
+        if (queryWords.length > 0) {
+          const matchedWords = queryWords.filter(w => searchText.includes(w));
+          const wordScore = matchedWords.length / queryWords.length;
+          if (wordScore > 0) {
+            score += wordScore * 0.6;
+            reasons.push(`${matchedWords.length}/${queryWords.length} keywords matched`);
+          }
         }
 
         // Tag match bonus

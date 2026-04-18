@@ -64,8 +64,8 @@ Usage pattern:
 Use this to persist any information that should survive across sessions: user preferences, facts, decisions, project context, instructions, relationships, goals, etc.
 
 Args:
-  - key (string): Unique identifier for this memory (e.g. "user_name", "project_goal", "api_key_hint"). Use snake_case.
-  - content (string): The actual memory content to store.
+  - key (string): Unique identifier for this memory (e.g. "user_name", "project_goal"). Auto-normalized to snake_case.
+  - content (string, required for new / optional for updates): The actual memory content. Omit when updating only importance, tags, or metadata.
   - category (string, optional): Namespace for organizing memories (e.g. "user", "project", "fact", "instruction"). Default: "general".
   - tags (string[], optional): Searchable labels (e.g. ["preference", "important"]).
   - importance ("low"|"medium"|"high"|"critical", optional): Priority level. Default: "medium".
@@ -75,10 +75,14 @@ Returns: Confirmation with the saved memory details and whether it was created o
 
 Examples:
   - "Remember my name is Youssef" → key="user_name", content="Youssef", category="user"
-  - "My preferred language is TypeScript" → key="preferred_language", content="TypeScript", category="preference", importance="high"`,
+  - "My preferred language is TypeScript" → key="preferred_language", content="TypeScript", category="preference", importance="high"
+  - Promote an existing memory to critical → key="user_name", importance="critical"  (no content needed)`,
       inputSchema: z.object({
-        key: z.string().min(1).max(200).describe("Unique memory key in snake_case (e.g. 'user_name', 'project_deadline')"),
-        content: z.string().min(1).max(10000).describe("The memory content to store"),
+        key: z.string().min(1).max(200)
+          .transform(k => k.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""))
+          .refine(k => k.length > 0, "Key must contain at least one alphanumeric character")
+          .describe("Unique memory key in snake_case (e.g. 'user_name', 'project_deadline'). Auto-normalized to lowercase with underscores."),
+        content: z.string().min(1).max(10000).optional().describe("The memory content to store. Required when creating; omit to keep existing content when updating."),
         category: z.string().min(1).max(100).default("general").describe("Namespace/category for organizing memories"),
         tags: z.array(z.string().max(50)).max(20).default([]).describe("Searchable tags for this memory"),
         importance: ImportanceSchema.default("medium").describe("Priority level: low, medium, high, critical"),
@@ -127,9 +131,9 @@ Returns: Full memory details, or a not-found message.`,
         key: z.string().min(1).describe("Exact memory key to retrieve"),
       }),
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,   // increments access_count and writes to disk
         destructiveHint: false,
-        idempotentHint: true,
+        idempotentHint: false,
         openWorldHint: false,
       },
     },
@@ -172,7 +176,7 @@ Returns: Ranked list of matching memories with relevance scores and match reason
         limit: z.number().int().min(1).max(50).default(10).describe("Maximum results to return (default: 10)"),
       }),
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,   // increments access_count on matched memories and writes to disk
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: false,
