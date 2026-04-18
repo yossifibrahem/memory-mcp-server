@@ -258,48 +258,6 @@ export class MemoryService {
     return scored;
   }
 
-  // ── Stats ────────────────────────────────────────────────────────────────────
-
-  stats(): {
-    total: number;
-    by_category: Record<string, number>;
-    by_importance: Record<ImportanceLevel, number>;
-    store_path: string;
-    last_saved: string;
-  } {
-    const memories = Object.values(this.store.memories);
-    const by_category: Record<string, number> = {};
-    const by_importance: Record<ImportanceLevel, number> = { low: 0, medium: 0, high: 0, critical: 0 };
-
-    for (const m of memories) {
-      by_category[m.category] = (by_category[m.category] ?? 0) + 1;
-      by_importance[m.importance]++;
-    }
-
-    return {
-      total: memories.length,
-      by_category,
-      by_importance,
-      store_path: this.storePath,
-      last_saved: this.store.last_saved,
-    };
-  }
-
-  // ── Bulk clear (by category or all) ──────────────────────────────────────────
-
-  clear(category?: string): number {
-    const before = Object.keys(this.store.memories).length;
-    if (category) {
-      for (const [key, m] of Object.entries(this.store.memories)) {
-        if (m.category === category) delete this.store.memories[key];
-      }
-    } else {
-      this.store.memories = {};
-    }
-    saveStore(this.store, this.storePath);
-    return before - Object.keys(this.store.memories).length;
-  }
-
   // ── Session start ─────────────────────────────────────────────────────────────
 
   startSession(): SessionSummary {

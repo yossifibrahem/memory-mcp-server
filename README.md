@@ -10,7 +10,7 @@ A persistent memory MCP server for LLMs. Models can save facts, preferences, con
 - **Full-text search** — keyword search across key, content, tags, category, and metadata
 - **Rich metadata** — categories, tags, importance levels, access tracking, timestamps
 - **Flexible transport** — stdio (for local tools like Cursor, LM Studio) or HTTP
-- **7 tools** covering the full memory lifecycle
+- **6 tools** covering the full memory lifecycle
 
 ---
 
@@ -23,8 +23,6 @@ A persistent memory MCP server for LLMs. Models can save facts, preferences, con
 | `memory_search` | Full-text search across all memories |
 | `memory_list` | Browse memories with filters + pagination |
 | `memory_delete` | Delete a single memory |
-| `memory_clear` | Bulk-delete by category or wipe all |
-| `memory_stats` | Overview of stored memories |
 
 ---
 
@@ -93,9 +91,6 @@ memory_list(category="user", sort_by="importance")
 
 # Delete stale memory
 memory_delete(key="old_project_deadline")
-
-# Stats overview
-memory_stats()
 ```
 
 ---
