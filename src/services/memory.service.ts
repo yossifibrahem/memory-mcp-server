@@ -1,165 +1,155 @@
 import fs from "fs";
 import path from "path";
-import { Memory, MemoryStore, SearchResult, ImportanceLevel, SessionLog, SessionSummary } from "../types.js";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { removeStopwords } = require("stopword") as { removeStopwords: (words: string[]) => string[] };
+import { Memory, MemoryStore, SearchResult, Importance, SessionSummary } from "../types.js";
 
-const STORE_VERSION = "1.0.0";
-const DEFAULT_STORE_PATH = path.join(
-  process.env.MEMORY_STORE_PATH || path.join(process.env.HOME || ".", ".memory-mcp"),
-  "memories.json"
-);
+const VERSION = "1.0.0";
+const IMPORTANCE_RANK: Record<Importance, number> = { low: 1, medium: 2, high: 3, critical: 4 };
 
-// ─── Persistence ───────────────────────────────────────────────────────────────
+function defaultStorePath(): string {
+  // MEMORY_STORE_PATH is treated as a full file path (not a directory)
+  return (
+    process.env.MEMORY_STORE_PATH ??
+    path.join(process.env.HOME ?? ".", ".memory-mcp", "memories.json")
+  );
+}
 
-function loadStore(storePath: string): MemoryStore {
+function loadStore(filePath: string): MemoryStore {
   try {
-    if (fs.existsSync(storePath)) {
-      const raw = fs.readFileSync(storePath, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<MemoryStore>;
+    if (fs.existsSync(filePath)) {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Partial<MemoryStore>;
       return {
-        version: parsed.version ?? STORE_VERSION,
+        version: parsed.version ?? VERSION,
         memories: parsed.memories ?? {},
-        sessions: parsed.sessions ?? [],   // back-compat with old stores
+        sessions: parsed.sessions ?? [],
         last_saved: parsed.last_saved ?? new Date().toISOString(),
       };
     }
   } catch {
-    // Corrupted store → start fresh
+    // Corrupted store — start fresh
   }
-  return { version: STORE_VERSION, memories: {}, sessions: [], last_saved: new Date().toISOString() };
+  return { version: VERSION, memories: {}, sessions: [], last_saved: new Date().toISOString() };
 }
 
-function saveStore(store: MemoryStore, storePath: string): void {
-  const dir = path.dirname(storePath);
+function saveStore(store: MemoryStore, filePath: string): void {
+  const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   store.last_saved = new Date().toISOString();
-  // Write atomically: write to a temp file then rename so a mid-write crash
-  // can never leave a partial/corrupted store file.
-  const tmp = storePath + ".tmp";
+  // Atomic write: write to tmp then rename to prevent corruption on crash
+  const tmp = filePath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
-  fs.renameSync(tmp, storePath);
+  fs.renameSync(tmp, filePath);
 }
 
-// ─── MemoryService ─────────────────────────────────────────────────────────────
+// ─── MemoryService ────────────────────────────────────────────────────────────
 
 export class MemoryService {
   private store: MemoryStore;
-  private storePath: string;
+  private readonly filePath: string;
 
-  constructor(storePath?: string) {
-    this.storePath = storePath || DEFAULT_STORE_PATH;
-    this.store = loadStore(this.storePath);
+  constructor(filePath?: string) {
+    this.filePath = filePath ?? defaultStorePath();
+    this.store = loadStore(this.filePath);
   }
 
-  // ── Save / Upsert ────────────────────────────────────────────────────────────
+  private persist() {
+    saveStore(this.store, this.filePath);
+  }
+
+  // ── Upsert ────────────────────────────────────────────────────────────────
 
   save(params: {
     key: string;
-    content?: string;          // optional for updates — omit to keep existing content
+    content?: string;
     category?: string;
     tags?: string[];
-    importance?: ImportanceLevel;
+    importance?: Importance;
     metadata?: Record<string, string>;
   }): { memory: Memory; action: "created" | "updated" } {
     const now = new Date().toISOString();
     const existing = this.store.memories[params.key];
 
     if (!existing && !params.content) {
-      throw new Error(`content is required when creating a new memory (key "${params.key}" does not exist yet)`);
+      throw new Error(`content is required when creating a new memory (key "${params.key}" not found)`);
     }
 
     const memory: Memory = {
-      id: existing?.id ?? crypto.randomUUID(),
-      key: params.key,
-      content: params.content ?? existing!.content,
-      category: params.category ?? existing?.category ?? "general",
-      tags: params.tags ?? existing?.tags ?? [],
-      importance: params.importance ?? existing?.importance ?? "medium",
-      created_at: existing?.created_at ?? now,
-      updated_at: now,
-      access_count: existing?.access_count ?? 0,
+      id:            existing?.id ?? crypto.randomUUID(),
+      key:           params.key,
+      content:       params.content ?? existing!.content,
+      category:      params.category ?? existing?.category ?? "general",
+      tags:          params.tags ?? existing?.tags ?? [],
+      importance:    params.importance ?? existing?.importance ?? "medium",
+      created_at:    existing?.created_at ?? now,
+      updated_at:    now,
+      access_count:  existing?.access_count ?? 0,
       last_accessed: existing?.last_accessed ?? now,
-      metadata: params.metadata ?? existing?.metadata ?? {},
+      metadata:      params.metadata ?? existing?.metadata ?? {},
     };
 
     this.store.memories[params.key] = memory;
-    saveStore(this.store, this.storePath);
-
+    this.persist();
     return { memory, action: existing ? "updated" : "created" };
   }
 
-  // ── Recall by exact key ──────────────────────────────────────────────────────
+  // ── Get by key ────────────────────────────────────────────────────────────
+  // access_count is incremented in-memory and will persist on the next write
 
   get(key: string): Memory | null {
-    const memory = this.store.memories[key] ?? null;
-    if (memory) {
-      memory.access_count++;
-      memory.last_accessed = new Date().toISOString();
-      saveStore(this.store, this.storePath);
+    const m = this.store.memories[key] ?? null;
+    if (m) {
+      m.access_count++;
+      m.last_accessed = new Date().toISOString();
     }
-    return memory;
+    return m;
   }
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
+  // ── Delete ────────────────────────────────────────────────────────────────
 
   delete(key: string): boolean {
     if (!this.store.memories[key]) return false;
     delete this.store.memories[key];
-    saveStore(this.store, this.storePath);
+    this.persist();
     return true;
   }
 
-  // ── List ─────────────────────────────────────────────────────────────────────
+  // ── List ──────────────────────────────────────────────────────────────────
 
   list(params: {
     category?: string;
     tags?: string[];
-    importance?: ImportanceLevel;
+    importance?: Importance;
     limit?: number;
     offset?: number;
     sort_by?: "created_at" | "updated_at" | "importance" | "access_count";
     sort_order?: "asc" | "desc";
   }): { memories: Memory[]; total: number } {
-    const importanceRank: Record<ImportanceLevel, number> = {
-      low: 1, medium: 2, high: 3, critical: 4,
-    };
-
     let results = Object.values(this.store.memories);
 
-    if (params.category) {
-      results = results.filter(m => m.category === params.category);
-    }
-    if (params.tags && params.tags.length > 0) {
-      results = results.filter(m =>
-        params.tags!.some(t => m.tags.includes(t))
-      );
-    }
-    if (params.importance) {
-      results = results.filter(m => m.importance === params.importance);
-    }
+    if (params.category)   results = results.filter(m => m.category === params.category);
+    if (params.importance) results = results.filter(m => m.importance === params.importance);
+    if (params.tags?.length)
+      results = results.filter(m => params.tags!.some(t => m.tags.includes(t)));
 
-    const sortBy = params.sort_by ?? "updated_at";
+    const sortBy    = params.sort_by    ?? "updated_at";
     const sortOrder = params.sort_order ?? "desc";
+    const dir = sortOrder === "asc" ? 1 : -1;
 
     results.sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === "importance") {
-        cmp = importanceRank[a.importance] - importanceRank[b.importance];
-      } else if (sortBy === "access_count") {
-        cmp = a.access_count - b.access_count;
-      } else {
-        cmp = a[sortBy].localeCompare(b[sortBy]);
-      }
-      return sortOrder === "asc" ? cmp : -cmp;
+      if (sortBy === "importance")    return dir * (IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance]);
+      if (sortBy === "access_count")  return dir * (a.access_count - b.access_count);
+      return dir * a[sortBy].localeCompare(b[sortBy]);
     });
 
-    const total = results.length;
+    const total  = results.length;
     const offset = params.offset ?? 0;
-    const limit = params.limit ?? 50;
-
+    const limit  = params.limit  ?? 50;
     return { memories: results.slice(offset, offset + limit), total };
   }
 
-  // ── Semantic / keyword search ─────────────────────────────────────────────────
+  // ── Search ────────────────────────────────────────────────────────────────
+  // access_count increments in-memory; persisted on next write
 
   search(params: {
     query: string;
@@ -167,152 +157,103 @@ export class MemoryService {
     tags?: string[];
     limit?: number;
   }): SearchResult[] {
-    const STOP_WORDS = new Set([
-      "a","an","the","is","are","was","were","be","been","being",
-      "have","has","had","do","does","did","will","would","could","should",
-      "may","might","what","where","when","who","how","in","on","at","to",
-      "for","of","with","by","from","and","or","but","not","my","your",
-      "their","its","this","that","these","those","i","you","he","she","we","they",
-    ]);
-
-    const query = params.query.toLowerCase().trim();
-    // Filter stop words and single-char tokens so they don't dilute word coverage
-    const queryWords = query
-      .split(/\s+/)
-      .filter(w => w.length > 1 && !STOP_WORDS.has(w));
-    const limit = params.limit ?? 10;
+    const query      = params.query.toLowerCase().trim();
+    const queryWords = removeStopwords(query.split(/\s+/)).filter(w => w.length > 1);
+    const limit      = params.limit ?? 10;
 
     let candidates = Object.values(this.store.memories);
-    if (params.category) candidates = candidates.filter(m => m.category === params.category);
-    if (params.tags?.length) {
+    if (params.category)   candidates = candidates.filter(m => m.category === params.category);
+    if (params.tags?.length)
       candidates = candidates.filter(m => params.tags!.some(t => m.tags.includes(t)));
-    }
 
-    const scored: SearchResult[] = candidates
-      .map(memory => {
-        const searchText = [
-          memory.key,
-          memory.content,
-          memory.category,
-          ...memory.tags,
-          ...Object.values(memory.metadata),
-        ].join(" ").toLowerCase();
+    const now = new Date().toISOString();
+
+    const results = candidates
+      .map((m): SearchResult => {
+        const haystack = [m.key, m.content, m.category, ...m.tags, ...Object.values(m.metadata)]
+          .join(" ").toLowerCase();
 
         let score = 0;
         const reasons: string[] = [];
 
-        // Exact key match → highest weight
-        if (memory.key.toLowerCase() === query) {
-          score += 1.0;
-          reasons.push("exact key match");
-        } else if (memory.key.toLowerCase().includes(query)) {
-          score += 0.7;
-          reasons.push("key contains query");
+        if (m.key.toLowerCase() === query) {
+          score += 1.0; reasons.push("exact key");
+        } else if (m.key.toLowerCase().includes(query)) {
+          score += 0.7; reasons.push("key match");
         }
 
-        // Exact phrase match in content (bonus over individual word hits)
-        if (queryWords.length > 1 && memory.content.toLowerCase().includes(query)) {
-          score += 0.5;
-          reasons.push("exact phrase in content");
+        if (queryWords.length > 1 && m.content.toLowerCase().includes(query)) {
+          score += 0.5; reasons.push("phrase in content");
         }
 
-        // Word coverage — only meaningful (non-stop) words
         if (queryWords.length > 0) {
-          const matchedWords = queryWords.filter(w => searchText.includes(w));
-          const wordScore = matchedWords.length / queryWords.length;
-          if (wordScore > 0) {
-            score += wordScore * 0.6;
-            reasons.push(`${matchedWords.length}/${queryWords.length} keywords matched`);
+          const hits = queryWords.filter(w => haystack.includes(w));
+          if (hits.length) {
+            score += (hits.length / queryWords.length) * 0.6;
+            reasons.push(`${hits.length}/${queryWords.length} keywords`);
           }
         }
 
-        // Tag match bonus
-        const tagHits = memory.tags.filter(t => t.toLowerCase().includes(query) || query.includes(t.toLowerCase()));
-        if (tagHits.length > 0) {
-          score += 0.3;
-          reasons.push(`tag match: ${tagHits.join(", ")}`);
+        const tagHits = m.tags.filter(t => t.toLowerCase().includes(query) || query.includes(t.toLowerCase()));
+        if (tagHits.length) {
+          score += 0.3; reasons.push(`tags: ${tagHits.join(", ")}`);
         }
 
-        // Importance boost
-        const importanceBoost: Record<ImportanceLevel, number> = {
-          low: 0, medium: 0.05, high: 0.1, critical: 0.15,
-        };
-        score += importanceBoost[memory.importance];
+        score += (IMPORTANCE_RANK[m.importance] - 1) * 0.05; // 0–0.15 boost
 
-        return { memory, score: Math.min(score, 1), match_reason: reasons.join("; ") };
+        return { memory: m, score: Math.min(score, 1), match_reason: reasons.join("; ") };
       })
       .filter(r => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
-    // Increment access counts
-    if (scored.length > 0) {
-      const now = new Date().toISOString();
-      scored.forEach(r => {
-        r.memory.access_count++;
-        r.memory.last_accessed = now;
-      });
-      saveStore(this.store, this.storePath);
+    // Bump access counts in-memory (will persist on next write)
+    for (const r of results) {
+      r.memory.access_count++;
+      r.memory.last_accessed = now;
     }
 
-    return scored;
+    return results;
   }
 
-  // ── Session start ─────────────────────────────────────────────────────────────
+  // ── Session start ─────────────────────────────────────────────────────────
 
   startSession(): SessionSummary {
-    const now = new Date().toISOString();
+    const now       = new Date().toISOString();
     const sessionId = crypto.randomUUID();
-    const allMemories = Object.values(this.store.memories);
+    const all       = Object.values(this.store.memories);
 
-    // Record this session
-    const log: SessionLog = {
-      session_id: sessionId,
-      started_at: now,
-      memory_count: allMemories.length,
-    };
-    this.store.sessions.push(log);
-    // Keep only the last 100 session logs
-    if (this.store.sessions.length > 100) {
-      this.store.sessions = this.store.sessions.slice(-100);
-    }
-    saveStore(this.store, this.storePath);
+    const prev = this.store.sessions.at(-1) ?? null;
 
-    // Previous session (second-to-last after we just pushed)
-    const prevSession = this.store.sessions.length >= 2
-      ? this.store.sessions[this.store.sessions.length - 2]
-      : null;
+    this.store.sessions.push({ id: sessionId, started_at: now, memory_count: all.length });
+    if (this.store.sessions.length > 100) this.store.sessions = this.store.sessions.slice(-100);
+    this.persist();
 
-    // 7-day recency window
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // Group by category
     const by_category: Record<string, Memory[]> = {};
-    for (const m of allMemories) {
+    for (const m of all) {
       (by_category[m.category] ??= []).push(m);
     }
-    // Sort each group: critical first, then by updated_at desc
-    const importanceRank: Record<ImportanceLevel, number> = {
-      low: 1, medium: 2, high: 3, critical: 4,
-    };
     for (const group of Object.values(by_category)) {
-      group.sort((a, b) =>
-        importanceRank[b.importance] - importanceRank[a.importance] ||
-        b.updated_at.localeCompare(a.updated_at)
+      group.sort(
+        (a, b) =>
+          IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance] ||
+          b.updated_at.localeCompare(a.updated_at),
       );
     }
 
     return {
-      session_id: sessionId,
-      started_at: now,
-      total_memories: allMemories.length,
-      sessions_count: this.store.sessions.length,
-      last_session_at: prevSession?.started_at ?? null,
-      critical_memories: allMemories.filter(m => m.importance === "critical"),
-      high_memories: allMemories.filter(m => m.importance === "high"),
-      recent_memories: allMemories.filter(m => m.updated_at >= sevenDaysAgo),
+      session_id:           sessionId,
+      started_at:           now,
+      total_memories:       all.length,
+      sessions_count:       this.store.sessions.length,
+      last_session_at:      prev?.started_at ?? null,
+      critical_memories:    all.filter(m => m.importance === "critical"),
+      high_memories:        all.filter(m => m.importance === "high"),
+      recent_memories:      all.filter(m => m.updated_at >= sevenDaysAgo),
       by_category,
-      pinned_instructions: allMemories.filter(m => m.category === "instruction"),
+      pinned_instructions:  all.filter(m => m.category === "instruction"),
     };
   }
 }

@@ -2,316 +2,212 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MemoryService } from "../services/memory.service.js";
 import { formatMemory, formatSearchResult, formatMemoryList, formatSessionSummary } from "../services/formatter.js";
-import { ImportanceLevel } from "../types.js";
+import { Importance } from "../types.js";
 
 const ImportanceSchema = z.enum(["low", "medium", "high", "critical"]);
-const SortBySchema = z.enum(["created_at", "updated_at", "importance", "access_count"]);
+const SortBySchema     = z.enum(["created_at", "updated_at", "importance", "access_count"]);
 
-export function registerTools(server: McpServer, memory: MemoryService): void {
+/** Normalize a user-supplied key to snake_case */
+const keySchema = z
+  .string().min(1).max(200)
+  .transform(k => k.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""))
+  .refine(k => k.length > 0, "Key must contain at least one alphanumeric character");
 
-  // ── memory_brief ────────────────────────────────────────────────────
+function text(t: string) {
+  return { content: [{ type: "text" as const, text: t }] };
+}
+
+export function registerTools(server: McpServer, svc: MemoryService): void {
+
+  // ── memory_brief ──────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_brief",
     {
       title: "Session Start — Memory Brief",
-      description: `⚡ CALL THIS TOOL ONCE AT THE START OF EVERY NEW CONVERSATION.
-
-Loads a structured memory brief so you begin each session with full context about the user. Returns:
-  - Pinned instructions (category="instruction") — rules you must always follow
-  - Critical & high-importance memories — the most essential facts
-  - All memories grouped by category — complete picture
-  - Recently updated memories (last 7 days) — what changed since last session
-  - Session metadata — session ID, when the previous session was, total memory count
-
-This tool records the session start in the session log (used for history and diagnostics).
-
-Args: (none)
-
-Returns: A formatted memory brief ready for you to internalize before responding to the user.
-
-Usage pattern:
-  1. User opens a new conversation
-  2. You call memory_brief immediately
-  3. You read the brief and silently apply all instructions and context
-  4. You greet the user`,
+      description:
+        "⚡ CALL THIS ONCE AT THE START OF EVERY NEW CONVERSATION.\n\n" +
+        "Returns a full memory brief: pinned instructions, critical/high memories, all memories by category, " +
+        "and recently updated entries. Logs the session start.\n\n" +
+        "Pattern: call → read brief silently → greet the user.",
       inputSchema: z.object({}),
-      annotations: {
-        readOnlyHint: false,  // false because it writes a session log entry
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async () => {
-      const summary = memory.startSession();
-      const text = formatSessionSummary(summary);
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: summary as unknown as Record<string, unknown>,
-      };
-    }
+      const summary = svc.startSession();
+      return { ...text(formatSessionSummary(summary)), structuredContent: summary as unknown as Record<string, unknown> };
+    },
   );
 
-  // ── memory_save ─────────────────────────────────────────────────────────────
+  // ── memory_save ───────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_save",
     {
       title: "Save Memory",
-      description: `Save or update a memory entry. Creates a new memory if the key doesn't exist, or updates the existing one.
-
-Use this to persist any information that should survive across sessions: user preferences, facts, decisions, project context, instructions, relationships, goals, etc.
-
-Args:
-  - key (string): Unique identifier for this memory (e.g. "user_name", "project_goal"). Auto-normalized to snake_case.
-  - content (string, required for new / optional for updates): The actual memory content. Omit when updating only importance, tags, or metadata.
-  - category (string, optional): Namespace for organizing memories (e.g. "user", "project", "fact", "instruction"). Default: "general".
-  - tags (string[], optional): Searchable labels (e.g. ["preference", "important"]).
-  - importance ("low"|"medium"|"high"|"critical", optional): Priority level. Default: "medium".
-  - metadata (object, optional): Extra string key-value pairs attached to this memory.
-
-Returns: Confirmation with the saved memory details and whether it was created or updated.
-
-Examples:
-  - "Remember my name is Youssef" → key="user_name", content="Youssef", category="user"
-  - "My preferred language is TypeScript" → key="preferred_language", content="TypeScript", category="preference", importance="high"
-  - Promote an existing memory to critical → key="user_name", importance="critical"  (no content needed)`,
+      description:
+        "Save or update a memory entry by key. Creates if new, updates if exists.\n\n" +
+        "Args:\n" +
+        "  key        — unique identifier, auto-normalized to snake_case\n" +
+        "  content    — the memory text (required when creating; omit to keep existing)\n" +
+        "  category   — namespace (e.g. user, project, instruction). Default: general\n" +
+        "  tags       — searchable labels\n" +
+        "  importance — low | medium | high | critical. Default: medium\n" +
+        "  metadata   — extra string key-value pairs",
       inputSchema: z.object({
-        key: z.string().min(1).max(200)
-          .transform(k => k.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""))
-          .refine(k => k.length > 0, "Key must contain at least one alphanumeric character")
-          .describe("Unique memory key in snake_case (e.g. 'user_name', 'project_deadline'). Auto-normalized to lowercase with underscores."),
-        content: z.string().min(1).max(10000).optional().describe("The memory content to store. Required when creating; omit to keep existing content when updating."),
-        category: z.string().min(1).max(100).default("general").describe("Namespace/category for organizing memories"),
-        tags: z.array(z.string().max(50)).max(20).default([]).describe("Searchable tags for this memory"),
-        importance: ImportanceSchema.default("medium").describe("Priority level: low, medium, high, critical"),
-        metadata: z.record(z.string(), z.string()).default({}).describe("Optional extra key-value metadata"),
+        key:        keySchema.describe("Unique memory key (auto-normalized to snake_case)"),
+        content:    z.string().min(1).max(10_000).optional().describe("Memory content"),
+        category:   z.string().min(1).max(100).default("general").describe("Category / namespace"),
+        tags:       z.array(z.string().max(50)).max(20).default([]).describe("Searchable tags"),
+        importance: ImportanceSchema.default("medium").describe("Priority: low | medium | high | critical"),
+        metadata:   z.record(z.string(), z.string()).default({}).describe("Extra key-value metadata"),
       }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async (params) => {
-      const { memory: saved, action } = memory.save({
-        key: params.key,
-        content: params.content,
-        category: params.category,
-        tags: params.tags,
-        importance: params.importance as ImportanceLevel,
-        metadata: params.metadata,
+    async (p) => {
+      const { memory: saved, action } = svc.save({
+        key: p.key, content: p.content, category: p.category,
+        tags: p.tags, importance: p.importance as Importance, metadata: p.metadata,
       });
-
-      const text = `✅ Memory ${action}.\n\n${formatMemory(saved)}`;
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: { action, memory: saved },
-      };
-    }
+      return { ...text(`✅ Memory ${action}.\n\n${formatMemory(saved)}`), structuredContent: { action, memory: saved } };
+    },
   );
 
-  // ── memory_recall ───────────────────────────────────────────────────────────
+  // ── memory_recall ─────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_recall",
     {
       title: "Recall Memory",
-      description: `Retrieve a specific memory by its exact key.
-
-Use this when you know the exact key of a memory you want to fetch. For fuzzy/keyword search, use memory_search instead.
-
-Args:
-  - key (string): The exact memory key to retrieve.
-
-Returns: Full memory details, or a not-found message.`,
+      description:
+        "Retrieve a memory by its exact key. Use memory_search for fuzzy/keyword lookup.\n\n" +
+        "Args:\n" +
+        "  key — exact memory key",
       inputSchema: z.object({
-        key: z.string().min(1).describe("Exact memory key to retrieve"),
+        key: z.string().min(1).describe("Exact memory key"),
       }),
-      annotations: {
-        readOnlyHint: false,   // increments access_count and writes to disk
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (params) => {
-      const found = memory.get(params.key);
-      if (!found) {
-        return {
-          content: [{ type: "text", text: `❌ No memory found with key: "${params.key}". Use memory_search to find by content or memory_list to browse all.` }],
-          structuredContent: { found: false, key: params.key },
-        };
-      }
-      return {
-        content: [{ type: "text", text: `✅ Memory recalled.\n\n${formatMemory(found)}` }],
-        structuredContent: { found: true, memory: found },
+    async (p) => {
+      const m = svc.get(p.key);
+      if (!m) return {
+        ...text(`❌ No memory found for key "${p.key}". Try memory_search or memory_list.`),
+        structuredContent: { found: false, key: p.key },
       };
-    }
+      return { ...text(`✅ Memory recalled.\n\n${formatMemory(m)}`), structuredContent: { found: true, memory: m } };
+    },
   );
 
-  // ── memory_search ───────────────────────────────────────────────────────────
+  // ── memory_search ─────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_search",
     {
       title: "Search Memories",
-      description: `Full-text search across all memories. Scores and ranks results by relevance.
-
-Use this to find memories when you don't know the exact key — searches across key names, content, tags, category, and metadata. Results are ranked by relevance score.
-
-Args:
-  - query (string): Search query — keywords, phrases, or partial content.
-  - category (string, optional): Restrict search to a specific category.
-  - tags (string[], optional): Only search memories that have at least one of these tags.
-  - limit (number, optional): Max results to return (default: 10, max: 50).
-
-Returns: Ranked list of matching memories with relevance scores and match reasons.`,
+      description:
+        "Full-text search across all memories — keys, content, tags, category, metadata. " +
+        "Results are ranked by relevance score.\n\n" +
+        "Args:\n" +
+        "  query    — keywords or phrase\n" +
+        "  category — restrict to a category (optional)\n" +
+        "  tags     — restrict to memories with any of these tags (optional)\n" +
+        "  limit    — max results (default 10, max 50)",
       inputSchema: z.object({
-        query: z.string().min(1).max(500).describe("Search query — keywords, phrases, or partial memory content"),
-        category: z.string().optional().describe("Filter by category (optional)"),
-        tags: z.array(z.string()).optional().describe("Filter by tags — returns memories with any of these tags"),
-        limit: z.number().int().min(1).max(50).default(10).describe("Maximum results to return (default: 10)"),
+        query:    z.string().min(1).max(500).describe("Search query"),
+        category: z.string().optional().describe("Filter by category"),
+        tags:     z.array(z.string()).optional().describe("Filter by tags (OR)"),
+        limit:    z.number().int().min(1).max(50).default(10).describe("Max results"),
       }),
-      annotations: {
-        readOnlyHint: false,   // increments access_count on matched memories and writes to disk
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (params) => {
-      const results = memory.search({
-        query: params.query,
-        category: params.category,
-        tags: params.tags,
-        limit: params.limit,
-      });
-
-      if (results.length === 0) {
-        return {
-          content: [{ type: "text", text: `🔍 No memories found matching "${params.query}". Try broader terms or use memory_list to see all memories.` }],
-          structuredContent: { query: params.query, count: 0, results: [] },
-        };
-      }
-
-      const text = [
-        `🔍 Found ${results.length} matching memor${results.length === 1 ? "y" : "ies"} for "${params.query}":`,
+    async (p) => {
+      const results = svc.search({ query: p.query, category: p.category, tags: p.tags, limit: p.limit });
+      if (!results.length) return {
+        ...text(`🔍 No memories found for "${p.query}". Try broader terms or memory_list.`),
+        structuredContent: { query: p.query, count: 0, results: [] },
+      };
+      const out = [
+        `🔍 ${results.length} result${results.length === 1 ? "" : "s"} for "${p.query}":`,
         "",
         ...results.map((r, i) => formatSearchResult(r, i + 1)),
       ].join("\n");
-
       return {
-        content: [{ type: "text", text }],
+        ...text(out),
         structuredContent: {
-          query: params.query,
+          query: p.query,
           count: results.length,
           results: results.map(r => ({ ...r.memory, score: r.score, match_reason: r.match_reason })),
         },
       };
-    }
+    },
   );
 
-  // ── memory_list ─────────────────────────────────────────────────────────────
+  // ── memory_list ───────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_list",
     {
       title: "List Memories",
-      description: `Browse all saved memories with optional filters and sorting.
-
-Use this to get an overview of stored memories, browse by category, or paginate through all entries.
-
-Args:
-  - category (string, optional): Filter by category.
-  - tags (string[], optional): Filter by tags (OR logic — returns memories with any tag).
-  - importance ("low"|"medium"|"high"|"critical", optional): Filter by importance level.
-  - sort_by ("created_at"|"updated_at"|"importance"|"access_count", optional): Sort field (default: "updated_at").
-  - sort_order ("asc"|"desc", optional): Sort direction (default: "desc").
-  - limit (number, optional): Page size (default: 50, max: 200).
-  - offset (number, optional): Pagination offset (default: 0).
-
-Returns: Paginated list of memories with total count.`,
+      description:
+        "Browse all memories with optional filters and pagination.\n\n" +
+        "Args:\n" +
+        "  category   — filter by category\n" +
+        "  tags       — filter by tags (OR match)\n" +
+        "  importance — filter by level\n" +
+        "  sort_by    — created_at | updated_at | importance | access_count (default: updated_at)\n" +
+        "  sort_order — asc | desc (default: desc)\n" +
+        "  limit      — page size (default 50, max 200)\n" +
+        "  offset     — pagination offset (default 0)",
       inputSchema: z.object({
-        category: z.string().optional().describe("Filter by category"),
-        tags: z.array(z.string()).optional().describe("Filter by tags (OR match)"),
-        importance: ImportanceSchema.optional().describe("Filter by importance level"),
-        sort_by: SortBySchema.default("updated_at").describe("Sort field"),
-        sort_order: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
-        limit: z.number().int().min(1).max(200).default(50).describe("Page size"),
-        offset: z.number().int().min(0).default(0).describe("Pagination offset"),
+        category:   z.string().optional(),
+        tags:       z.array(z.string()).optional(),
+        importance: ImportanceSchema.optional(),
+        sort_by:    SortBySchema.default("updated_at"),
+        sort_order: z.enum(["asc", "desc"]).default("desc"),
+        limit:      z.number().int().min(1).max(200).default(50),
+        offset:     z.number().int().min(0).default(0),
       }),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async (params) => {
-      const { memories, total } = memory.list({
-        category: params.category,
-        tags: params.tags,
-        importance: params.importance as ImportanceLevel | undefined,
-        sort_by: params.sort_by as "created_at" | "updated_at" | "importance" | "access_count",
-        sort_order: params.sort_order as "asc" | "desc",
-        limit: params.limit,
-        offset: params.offset,
+    async (p) => {
+      const { memories, total } = svc.list({
+        category:   p.category,
+        tags:       p.tags,
+        importance: p.importance as Importance | undefined,
+        sort_by:    p.sort_by as "created_at" | "updated_at" | "importance" | "access_count",
+        sort_order: p.sort_order as "asc" | "desc",
+        limit:      p.limit,
+        offset:     p.offset,
       });
-
-      const text = formatMemoryList(memories, total, params.offset);
       return {
-        content: [{ type: "text", text }],
-        structuredContent: {
-          total,
-          count: memories.length,
-          offset: params.offset,
-          memories,
-          has_more: total > params.offset + memories.length,
-        },
+        ...text(formatMemoryList(memories, total, p.offset)),
+        structuredContent: { total, count: memories.length, offset: p.offset, memories, has_more: total > p.offset + memories.length },
       };
-    }
+    },
   );
 
-  // ── memory_delete ───────────────────────────────────────────────────────────
+  // ── memory_delete ─────────────────────────────────────────────────────────
 
   server.registerTool(
     "memory_delete",
     {
       title: "Delete Memory",
-      description: `Permanently delete a memory by its key.
-
-This action is irreversible. Use with care.
-
-Args:
-  - key (string): Exact key of the memory to delete.
-
-Returns: Confirmation if deleted, or error if key not found.`,
+      description: "Permanently delete a memory by key. Irreversible.\n\nArgs:\n  key — exact key to delete",
       inputSchema: z.object({
         key: z.string().min(1).describe("Exact memory key to delete"),
       }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async (params) => {
-      const deleted = memory.delete(params.key);
-      if (!deleted) {
-        return {
-          content: [{ type: "text", text: `❌ No memory found with key: "${params.key}". Nothing was deleted.` }],
-          structuredContent: { deleted: false, key: params.key },
-        };
-      }
-      return {
-        content: [{ type: "text", text: `🗑️ Memory "${params.key}" has been permanently deleted.` }],
-        structuredContent: { deleted: true, key: params.key },
+    async (p) => {
+      const deleted = svc.delete(p.key);
+      if (!deleted) return {
+        ...text(`❌ No memory found for key "${p.key}". Nothing deleted.`),
+        structuredContent: { deleted: false, key: p.key },
       };
-    }
+      return {
+        ...text(`🗑️ Memory "${p.key}" permanently deleted.`),
+        structuredContent: { deleted: true, key: p.key },
+      };
+    },
   );
-
 }
