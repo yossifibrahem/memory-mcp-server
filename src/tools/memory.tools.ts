@@ -26,13 +26,11 @@ export function registerTools(server: McpServer, svc: MemoryService): void {
     {
       title: "Session Start — Memory Brief",
       description:
-        "⚡ CALL THIS ONCE AT THE START OF EVERY NEW CONVERSATION.\n\n" +
+        "⚡ CALL THIS ONCE AT THE START OF EVERY CONVERSATION.\n\n" +
         "Returns a full memory brief: pinned instructions, critical/high memories, all memories by category, " +
         "and recently updated entries. Logs the session start.\n\n" +
-        "Pattern: call → read brief silently → greet the user.\n\n" +
-        "Examples:\n" +
-        "  memory_brief({})   // called automatically at the top of every conversation\n" +
-        "  // → returns pinned instructions, critical/high memories, and a per-category index",
+        "You must call this at the start of each new conversation to initialize the session context and get the latest memory snapshot. "+
+        "Pattern: call → read brief silently → greet the user.\n\n" ,
       inputSchema: z.object({}),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
